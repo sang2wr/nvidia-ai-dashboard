@@ -41,15 +41,23 @@ IMAGE_SIZES = {
 }
 
 POSTER_FONTS = {
-    "나눔고딕": {
+    "나눔고딕 (기본, 산세리프)": {
         "regular": os.path.join(BASE_DIR, "fonts", "NanumGothic.ttf"),
         "bold": os.path.join(BASE_DIR, "fonts", "NanumGothicBold.ttf"),
     },
-    "Noto Sans KR": {
+    "Noto Sans KR (산세리프)": {
         "regular": os.path.join(BASE_DIR, "fonts", "NotoSansKR-Regular.ttf"),
         "bold": os.path.join(BASE_DIR, "fonts", "NotoSansKR-Bold.ttf"),
     },
+    "나눔명조 (세리프, 격식있는 느낌)": {
+        "regular": os.path.join(BASE_DIR, "fonts", "NanumMyeongjo.ttf"),
+        "bold": os.path.join(BASE_DIR, "fonts", "NanumMyeongjoBold.ttf"),
+    },
 }
+
+SHADOW_LEVELS = {"없음": 0, "약하게": 2, "강하게": 5}
+BORDER_LEVELS = {"없음": 0, "얇게": 2, "두껍게": 4}
+BAR_LEVELS = {"사용 안 함": None, "반투명": 120, "진하게": 190}
 
 POSTER_TEXT_MODEL = "meta/llama-3.1-70b-instruct"
 
@@ -127,34 +135,34 @@ def generate_english_prompt(idea, api_key):
 
 def generate_poster_copy(idea, api_key):
     system = (
-        "너는 홍보 포스터 카피라이터야. 주어진 내용을 바탕으로 포스터에 들어갈 문구를 만들어. "
-        "반드시 아래 형식 그대로, 라벨을 붙여서 정확히 3줄로만 답해:\n"
-        "제목: (12자 이내, 임팩트있게)\n"
-        "부제목: (25자 이내)\n"
-        "본문: (40자 이내, 간단한 설명·일시·장소 등)"
+        "너는 행사·교육 안내 포스터 카피라이터야. 주어진 내용을 바탕으로 안내 포스터에 들어갈 "
+        "문구를 만들어. 반드시 아래 형식 그대로, 라벨을 붙여서 정확히 3줄로만 답해:\n"
+        "제목: (행사명/교육명, 15자 이내, 임팩트있게)\n"
+        "기간: (일시·기간. 내용에 날짜/요일 정보가 없으면 \"별도 안내\"라고 적어)\n"
+        "내용: (장소·대상·신청방법 등 안내사항, 60자 이내, 여러 정보는 ' · '로 구분)"
     )
     raw = call_chat(
         POSTER_TEXT_MODEL,
         [{"role": "system", "content": system}, {"role": "user", "content": idea}],
         api_key,
         temperature=0.8,
-        max_tokens=200,
+        max_tokens=250,
     )
-    title, subtitle, body = "", "", ""
+    title, period, content = "", "", ""
     for line in raw.splitlines():
         line = line.strip()
         if line.startswith("제목:"):
             title = line.split(":", 1)[1].strip()
-        elif line.startswith("부제목:"):
-            subtitle = line.split(":", 1)[1].strip()
-        elif line.startswith("본문:"):
-            body = line.split(":", 1)[1].strip()
-    return title, subtitle, body
+        elif line.startswith("기간:"):
+            period = line.split(":", 1)[1].strip()
+        elif line.startswith("내용:"):
+            content = line.split(":", 1)[1].strip()
+    return title, period, content
 
 
 # ---------- 포스터 합성 ----------
 
-def fit_font(draw, text, font_path, max_width, start_size, min_size=16):
+def fit_font(draw, text, font_path, max_width, start_size, min_size=14):
     size = start_size
     while size > min_size:
         font = ImageFont.truetype(font_path, size)
@@ -165,61 +173,125 @@ def fit_font(draw, text, font_path, max_width, start_size, min_size=16):
     return ImageFont.truetype(font_path, min_size)
 
 
-def draw_centered(draw, y, text, font, width, fill, shadow, border):
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw = bbox[2] - bbox[0]
-    x = (width - tw) // 2
-    if shadow:
-        draw.text((x + 3, y + 3), text, font=font, fill=(0, 0, 0, 160))
-    if border:
-        draw.text((x, y), text, font=font, fill=fill, stroke_width=3, stroke_fill=(0, 0, 0, 255))
-    else:
-        draw.text((x, y), text, font=font, fill=fill)
-    return bbox[3] - bbox[1]
+def wrap_text(draw, text, font, max_width):
+    if not text:
+        return []
+    words = text.split(" ")
+    lines = []
+    current = ""
+    for word in words:
+        trial = f"{current} {word}".strip()
+        bbox = draw.textbbox((0, 0), trial, font=font)
+        if (bbox[2] - bbox[0]) <= max_width or not current:
+            current = trial
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+
+    final_lines = []
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        if (bbox[2] - bbox[0]) <= max_width:
+            final_lines.append(line)
+            continue
+        buf = ""
+        for ch in line:
+            trial = buf + ch
+            bbox = draw.textbbox((0, 0), trial, font=font)
+            if (bbox[2] - bbox[0]) <= max_width or not buf:
+                buf = trial
+            else:
+                final_lines.append(buf)
+                buf = ch
+        if buf:
+            final_lines.append(buf)
+    return final_lines
 
 
-def compose_poster(image_bytes, title, subtitle, body, position, font_paths, text_color, shadow, border):
+def compose_poster(
+    image_bytes, title, period, content,
+    align, position_preset, offset_pct,
+    font_paths, title_color, body_color,
+    shadow_level, border_level, border_color, bar_level,
+):
     img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
     w, h = img.size
+    draw = ImageDraw.Draw(img)
 
-    lines = [(t, f) for t, f in [(title, "bold"), (subtitle, "regular"), (body, "regular")] if t]
-    if not lines:
+    padding_x = int(w * 0.07)
+    max_text_w = w - padding_x * 2
+    gap = int(h * 0.015)
+
+    items = []  # (text, font, role)
+    if title:
+        font = fit_font(draw, title, font_paths["bold"], max_text_w, int(h * 0.075))
+        items.append((title, font, "title"))
+    if period:
+        font = ImageFont.truetype(font_paths["regular"], int(h * 0.032))
+        items.append((period, font, "body"))
+    if content:
+        font = ImageFont.truetype(font_paths["regular"], int(h * 0.026))
+        for line in wrap_text(draw, content, font, max_text_w):
+            items.append((line, font, "body"))
+
+    if not items:
         buf = io.BytesIO()
         img.convert("RGB").save(buf, format="PNG")
         return buf.getvalue()
 
-    draw = ImageDraw.Draw(img)
-    padding = int(w * 0.06)
-    max_text_w = w - padding * 2
-
-    sizes = {"bold": int(h * 0.075), "regular": int(h * 0.035)}
-    fonts = []
+    heights = []
     total_h = 0
-    gap = int(h * 0.02)
-    for text, weight in lines:
-        font = fit_font(draw, text, font_paths[weight], max_text_w, sizes[weight])
+    for text, font, _role in items:
         bbox = draw.textbbox((0, 0), text, font=font)
-        fonts.append((text, font, bbox[3] - bbox[1]))
-        total_h += (bbox[3] - bbox[1]) + gap
+        th = bbox[3] - bbox[1]
+        heights.append(th)
+        total_h += th + gap
     total_h -= gap
 
-    bar_h = total_h + padding * 2
-    if position == "상단":
-        bar_top = 0
-    elif position == "중앙":
-        bar_top = (h - bar_h) // 2
+    bar_pad = int(h * 0.035)
+    bar_h = total_h + bar_pad * 2
+
+    if position_preset == "상단":
+        base_top = 0
+    elif position_preset == "중앙":
+        base_top = (h - bar_h) // 2
     else:
-        bar_top = h - bar_h
+        base_top = h - bar_h
 
-    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    odraw = ImageDraw.Draw(overlay)
-    odraw.rectangle([0, max(bar_top, 0), w, min(bar_top + bar_h, h)], fill=(0, 0, 0, 130))
-    img = Image.alpha_composite(img, overlay)
-    draw = ImageDraw.Draw(img)
+    offset = int(h * offset_pct / 100)
+    bar_top = max(0, min(h - bar_h, base_top + offset))
 
-    y = bar_top + padding
-    for text, font, th in fonts:
-        draw_centered(draw, y, text, font, w, text_color, shadow, border)
+    bar_alpha = BAR_LEVELS.get(bar_level)
+    if bar_alpha:
+        overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        odraw = ImageDraw.Draw(overlay)
+        odraw.rectangle([0, bar_top, w, bar_top + bar_h], fill=(0, 0, 0, bar_alpha))
+        img = Image.alpha_composite(img, overlay)
+        draw = ImageDraw.Draw(img)
+
+    shadow_offset = SHADOW_LEVELS.get(shadow_level, 0)
+    border_width = BORDER_LEVELS.get(border_level, 0)
+
+    y = bar_top + bar_pad
+    for (text, font, role), th in zip(items, heights):
+        color = title_color if role == "title" else body_color
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw = bbox[2] - bbox[0]
+        if align == "좌측":
+            x = padding_x
+        elif align == "우측":
+            x = w - padding_x - tw
+        else:
+            x = (w - tw) // 2
+
+        if shadow_offset:
+            draw.text((x + shadow_offset, y + shadow_offset), text, font=font, fill=(0, 0, 0, 160))
+        if border_width:
+            draw.text((x, y), text, font=font, fill=color, stroke_width=border_width, stroke_fill=border_color)
+        else:
+            draw.text((x, y), text, font=font, fill=color)
         y += th + gap
 
     buf = io.BytesIO()
@@ -276,11 +348,23 @@ with st.sidebar:
         st.caption("모델: FLUX.1-dev(이미지) + Llama 3.1 70B(문구/번역)")
         poster_size_label = st.selectbox("포스터 비율", list(IMAGE_SIZES.keys()), index=1)
         poster_steps = st.slider("Steps (품질/속도)", 10, 50, 25, 5)
-        poster_position = st.selectbox("문구 위치", ["상단", "중앙", "하단"], index=2)
+
+        st.markdown("**문구 배치**")
+        poster_align = st.selectbox("가로 정렬", ["좌측", "중앙", "우측"], index=1)
+        poster_position = st.selectbox("세로 위치", ["상단", "중앙", "하단"], index=2)
+        poster_offset = st.slider("위치 미세조정 (%)", -20, 20, 0, 1)
+
+        st.markdown("**글꼴 · 색상**")
         poster_font_label = st.selectbox("폰트", list(POSTER_FONTS.keys()))
-        poster_color = st.color_picker("글자색", "#FFFFFF")
-        poster_shadow = st.checkbox("그림자 효과", value=True)
-        poster_border = st.checkbox("테두리 효과", value=False)
+        poster_title_color = st.color_picker("제목 글자색", "#FFFFFF")
+        poster_body_color = st.color_picker("기간/내용 글자색", "#F0F0F0")
+
+        st.markdown("**효과**")
+        poster_shadow_level = st.selectbox("그림자", list(SHADOW_LEVELS.keys()), index=1)
+        poster_border_level = st.selectbox("테두리", list(BORDER_LEVELS.keys()), index=0)
+        poster_border_color = st.color_picker("테두리색", "#000000") if poster_border_level != "없음" else "#000000"
+        poster_bar_level = st.selectbox("텍스트 배경바", list(BAR_LEVELS.keys()), index=1)
+
         poster_upscale = st.selectbox("업스케일", ["없음", "x2", "x4"], index=1)
         st.caption("⏱️ 전체 파이프라인(번역→이미지→문구→합성→업스케일)에 30초~1분 정도 걸립니다.")
 
@@ -372,8 +456,8 @@ else:
         ("poster_en_prompt", ""),
         ("poster_raw_image", None),
         ("poster_title", ""),
-        ("poster_subtitle", ""),
-        ("poster_body", ""),
+        ("poster_period", ""),
+        ("poster_content", ""),
         ("poster_composed", None),
         ("poster_final", None),
     ]:
@@ -381,8 +465,8 @@ else:
             st.session_state[key] = default
 
     idea = st.text_area(
-        "① 포스터 아이디어를 입력하세요 (한글로, 자유롭게)",
-        placeholder="예: 중장년 대상 AI 교육 홍보 포스터, 따뜻한 분위기, 밝은 파스텔톤, 행복한 노부부, 봄꽃",
+        "① 포스터 아이디어를 입력하세요 (한글로, 자유롭게 — 행사/교육명, 일시, 장소, 대상 등을 포함하면 좋습니다)",
+        placeholder="예: 중장년 대상 AI 교육 안내 포스터, 8월 매주 화요일 오후 2시, 주민센터 강당, 따뜻한 파스텔톤 분위기",
         height=100,
         max_chars=5000,
     )
@@ -440,21 +524,26 @@ else:
         else:
             with st.spinner("포스터 문구 생성 중..."):
                 try:
-                    title, subtitle, body = generate_poster_copy(idea, api_key)
+                    title, period, content = generate_poster_copy(idea, api_key)
                     st.session_state.poster_title = title
-                    st.session_state.poster_subtitle = subtitle
-                    st.session_state.poster_body = body
+                    st.session_state.poster_period = period
+                    st.session_state.poster_content = content
                 except Exception as e:
                     st.error(f"요청 실패: {e}")
 
-    st.markdown("④ 포스터 문구 (자동 생성됨, 직접 수정 가능)")
-    tcol1, tcol2, tcol3 = st.columns(3)
+    st.markdown("④ 포스터 문구 (자동 생성됨, 직접 수정 가능 — 안내 포스터 형식: 제목/기간/내용)")
+    st.session_state.poster_title = st.text_input(
+        "제목 (행사·교육명)", value=st.session_state.poster_title
+    )
+    tcol1, tcol2 = st.columns([1, 2])
     with tcol1:
-        st.session_state.poster_title = st.text_input("제목", value=st.session_state.poster_title)
+        st.session_state.poster_period = st.text_input(
+            "기간 (일시)", value=st.session_state.poster_period
+        )
     with tcol2:
-        st.session_state.poster_subtitle = st.text_input("부제목", value=st.session_state.poster_subtitle)
-    with tcol3:
-        st.session_state.poster_body = st.text_input("본문", value=st.session_state.poster_body)
+        st.session_state.poster_content = st.text_input(
+            "내용 (장소·대상·신청방법 등)", value=st.session_state.poster_content
+        )
 
     step4 = st.button("4단계: 포스터 합성", type="primary")
     if step4:
@@ -465,13 +554,18 @@ else:
             st.session_state.poster_composed = compose_poster(
                 st.session_state.poster_raw_image,
                 st.session_state.poster_title,
-                st.session_state.poster_subtitle,
-                st.session_state.poster_body,
+                st.session_state.poster_period,
+                st.session_state.poster_content,
+                poster_align,
                 poster_position,
+                poster_offset,
                 font_paths,
-                hex_to_rgb(poster_color),
-                poster_shadow,
-                poster_border,
+                hex_to_rgb(poster_title_color),
+                hex_to_rgb(poster_body_color),
+                poster_shadow_level,
+                poster_border_level,
+                hex_to_rgb(poster_border_color),
+                poster_bar_level,
             )
             st.session_state.poster_final = None
 
