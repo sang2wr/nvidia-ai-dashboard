@@ -6,6 +6,7 @@ import random
 import urllib.request
 import urllib.error
 
+import qrcode
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
@@ -215,6 +216,8 @@ def compose_poster(
     align, position_preset, offset_pct,
     font_paths, title_color, body_color,
     shadow_level, border_level, border_color, bar_level,
+    logo_bytes=None, logo_position="우상단", logo_size_pct=15,
+    qr_image=None, qr_position="우하단", qr_size_pct=12,
 ):
     img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
     w, h = img.size
@@ -294,9 +297,49 @@ def compose_poster(
             draw.text((x, y), text, font=font, fill=color)
         y += th + gap
 
+    if logo_bytes:
+        logo_img = Image.open(io.BytesIO(logo_bytes))
+        img = paste_overlay(img, logo_img, logo_position, logo_size_pct)
+
+    if qr_image is not None:
+        img = paste_overlay(img, qr_image, qr_position, qr_size_pct)
+
     buf = io.BytesIO()
     img.convert("RGB").save(buf, format="PNG")
     return buf.getvalue()
+
+
+CORNER_POSITIONS = ["좌상단", "우상단", "좌하단", "우하단"]
+
+
+def generate_qr_image(data):
+    qr = qrcode.QRCode(border=1)
+    qr.add_data(data)
+    qr.make(fit=True)
+    return qr.make_image(fill_color="black", back_color="white").convert("RGBA")
+
+
+def paste_overlay(img, overlay_img, position, size_pct, padding_pct=0.03):
+    w, h = img.size
+    overlay_img = overlay_img.convert("RGBA")
+    max_dim = max(1, int(min(w, h) * size_pct / 100))
+    ow, oh = overlay_img.size
+    scale = max_dim / max(ow, oh)
+    new_size = (max(1, int(ow * scale)), max(1, int(oh * scale)))
+    resized = overlay_img.resize(new_size, Image.LANCZOS)
+
+    pad = int(min(w, h) * padding_pct)
+    if position == "좌상단":
+        xy = (pad, pad)
+    elif position == "우상단":
+        xy = (w - new_size[0] - pad, pad)
+    elif position == "좌하단":
+        xy = (pad, h - new_size[1] - pad)
+    else:
+        xy = (w - new_size[0] - pad, h - new_size[1] - pad)
+
+    img.paste(resized, xy, resized)
+    return img
 
 
 def upscale_image(image_bytes, factor):
@@ -364,6 +407,22 @@ with st.sidebar:
         poster_border_level = st.selectbox("테두리", list(BORDER_LEVELS.keys()), index=0)
         poster_border_color = st.color_picker("테두리색", "#000000") if poster_border_level != "없음" else "#000000"
         poster_bar_level = st.selectbox("텍스트 배경바", list(BAR_LEVELS.keys()), index=1)
+
+        st.markdown("**로고 · QR코드**")
+        poster_logo_file = st.file_uploader("로고 이미지 (선택, 배경투명 PNG 권장)", type=["png", "jpg", "jpeg"])
+        if poster_logo_file:
+            poster_logo_position = st.selectbox("로고 위치", CORNER_POSITIONS, index=1, key="logo_pos")
+            poster_logo_size = st.slider("로고 크기 (%)", 5, 40, 15, 1, key="logo_size")
+        else:
+            poster_logo_position, poster_logo_size = "우상단", 15
+
+        poster_qr_enabled = st.checkbox("QR 코드 추가")
+        if poster_qr_enabled:
+            poster_qr_data = st.text_input("QR 코드에 담을 URL 또는 텍스트")
+            poster_qr_position = st.selectbox("QR 위치", CORNER_POSITIONS, index=3, key="qr_pos")
+            poster_qr_size = st.slider("QR 크기 (%)", 5, 30, 12, 1, key="qr_size")
+        else:
+            poster_qr_data, poster_qr_position, poster_qr_size = "", "우하단", 12
 
         poster_upscale = st.selectbox("업스케일", ["없음", "x2", "x4"], index=1)
         st.caption("⏱️ 전체 파이프라인(번역→이미지→문구→합성→업스케일)에 30초~1분 정도 걸립니다.")
@@ -566,6 +625,12 @@ else:
                 poster_border_level,
                 hex_to_rgb(poster_border_color),
                 poster_bar_level,
+                logo_bytes=poster_logo_file.getvalue() if poster_logo_file else None,
+                logo_position=poster_logo_position,
+                logo_size_pct=poster_logo_size,
+                qr_image=generate_qr_image(poster_qr_data) if (poster_qr_enabled and poster_qr_data.strip()) else None,
+                qr_position=poster_qr_position,
+                qr_size_pct=poster_qr_size,
             )
             st.session_state.poster_final = None
 
