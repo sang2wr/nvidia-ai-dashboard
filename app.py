@@ -11,12 +11,11 @@ API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 MODELS = [
     "meta/llama-3.1-8b-instruct",
     "meta/llama-3.1-70b-instruct",
-    "meta/llama-3.1-405b-instruct",
-    "nvidia/llama-3.1-nemotron-70b-instruct",
+    "meta/llama-3.3-70b-instruct",
+    "nvidia/llama-3.3-nemotron-super-49b-v1",
     "mistralai/mixtral-8x7b-instruct-v0.1",
-    "mistralai/mistral-7b-instruct-v0.3",
-    "google/gemma-2-9b-it",
-    "microsoft/phi-3-medium-4k-instruct",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
 ]
 
 st.title("🟢 NVIDIA AI 모델 플레이그라운드")
@@ -29,7 +28,9 @@ with st.sidebar:
 
     model = st.selectbox("모델 선택", MODELS, index=0)
     temperature = st.slider("Temperature", 0.0, 1.5, 0.7, 0.05)
-    max_tokens = st.slider("Max tokens", 64, 2048, 512, 64)
+    max_tokens = st.slider("Max tokens", 64, 4096, 768, 64)
+    if model.startswith("openai/gpt-oss"):
+        st.caption("⚠️ 추론(reasoning) 모델이라 max_tokens가 낮으면 답변이 잘릴 수 있습니다.")
 
     if st.button("대화 초기화"):
         st.session_state.messages = []
@@ -74,9 +75,10 @@ if user_input:
 
             full_response = ""
             try:
-                with urllib.request.urlopen(req, timeout=60) as resp:
+                with urllib.request.urlopen(req, timeout=90) as resp:
                     body = json.loads(resp.read().decode("utf-8"))
-                    full_response = body["choices"][0]["message"]["content"]
+                    message = body["choices"][0]["message"]
+                    full_response = message.get("content") or message.get("reasoning_content") or ""
             except urllib.error.HTTPError as e:
                 st.error(f"API 오류 ({e.code}): {e.read().decode('utf-8', errors='ignore')}")
                 st.stop()
