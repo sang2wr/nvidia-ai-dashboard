@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 st.set_page_config(page_title="NVIDIA AI 모델 플레이그라운드", page_icon="🟢", layout="wide")
 
 CHAT_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-IMAGE_API_URL = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev"
+IMAGE_API_URL = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.2-klein-4b"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -27,11 +27,11 @@ MODEL_CATEGORIES = {
         ("openai/gpt-oss-120b", "복잡한 코드·디버깅에 강함(느림)"),
     ],
     "🧠 심층 추론·복잡한 분석": [
-        ("nvidia/llama-3.3-nemotron-super-49b-v1", "NVIDIA 튜닝 · 복잡한 추론/분석 특화"),
+        ("nvidia/llama-3.3-nemotron-super-49b-v1.5", "NVIDIA 튜닝 · 복잡한 추론/분석 특화"),
     ],
     "⚡ 빠른 일반대화": [
         ("meta/llama-3.1-8b-instruct", "가장 빠른 응답 · 일상 대화"),
-        ("mistralai/mixtral-8x7b-instruct-v0.1", "MoE 구조 · 빠르면서 균형잡힌 성능"),
+        ("z-ai/glm-5.2", "GLM-5.2 · 빠르고 자연스러운 대화"),
     ],
 }
 
@@ -88,15 +88,14 @@ def call_chat(model, messages, api_key, temperature=0.7, max_tokens=300):
         return (message.get("content") or message.get("reasoning_content") or "").strip()
 
 
-def call_image(prompt, width, height, cfg_scale, steps, api_key):
+def call_image(prompt, width, height, steps, api_key):
+    # flux.2-klein-4b: steps는 최대 4, cfg_scale·mode 파라미터는 받지 않음(422)
     payload = {
         "prompt": prompt,
         "width": width,
         "height": height,
-        "cfg_scale": cfg_scale,
-        "steps": steps,
+        "steps": min(int(steps), 4),
         "seed": random.randint(0, 2**31 - 1),
-        "mode": "base",
     }
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -381,16 +380,15 @@ with st.sidebar:
             st.rerun()
 
     elif mode == "🎨 이미지 생성":
-        st.caption("모델: black-forest-labs/flux.1-dev")
+        st.caption("모델: black-forest-labs/flux.2-klein-4b")
         size_label = st.selectbox("이미지 비율", list(IMAGE_SIZES.keys()))
-        steps = st.slider("Steps (품질/속도)", 10, 50, 25, 5)
-        cfg_scale = st.slider("CFG Scale (프롬프트 반영 강도)", 1.0, 10.0, 5.0, 0.5)
-        st.caption("⏱️ 이미지 1장 생성에 15~30초 정도 걸립니다.")
+        steps = st.slider("Steps (품질/속도, 최대 4)", 1, 4, 4, 1)
+        st.caption("⏱️ 이미지 1장 생성에 수 초 정도 걸립니다.")
 
     else:
-        st.caption("모델: FLUX.1-dev(이미지) + Llama 3.1 70B(문구/번역)")
+        st.caption("모델: FLUX.2-klein(이미지) + Llama 3.1 70B(문구/번역)")
         poster_size_label = st.selectbox("포스터 비율", list(IMAGE_SIZES.keys()), index=1)
-        poster_steps = st.slider("Steps (품질/속도)", 10, 50, 25, 5)
+        poster_steps = st.slider("Steps (품질/속도, 최대 4)", 1, 4, 4, 1)
 
         st.markdown("**문구 배치**")
         poster_align = st.selectbox("가로 정렬", ["좌측", "중앙", "우측"], index=1)
@@ -490,9 +488,9 @@ elif mode == "🎨 이미지 생성":
             st.stop()
 
         width, height = IMAGE_SIZES[size_label]
-        with st.spinner("이미지 생성 중... (15~30초 소요)"):
+        with st.spinner("이미지 생성 중... (수 초 소요)"):
             try:
-                img_bytes = call_image(prompt, width, height, cfg_scale, steps, api_key)
+                img_bytes = call_image(prompt, width, height, steps, api_key)
                 st.session_state.images.insert(0, {"prompt": prompt, "bytes": img_bytes})
             except urllib.error.HTTPError as e:
                 st.error(f"API 오류 ({e.code}): {e.read().decode('utf-8', errors='ignore')}")
@@ -504,8 +502,8 @@ elif mode == "🎨 이미지 생성":
         st.download_button(
             "다운로드",
             data=item["bytes"],
-            file_name=f"nvidia_flux_{i}.png",
-            mime="image/png",
+            file_name=f"nvidia_flux_{i}.jpg",
+            mime="image/jpeg",
             key=f"dl_{i}",
         )
         st.divider()
@@ -562,10 +560,10 @@ else:
             st.error("영어 프롬프트를 먼저 생성하거나 입력해주세요.")
         else:
             width, height = IMAGE_SIZES[poster_size_label]
-            with st.spinner("이미지 생성 중... (15~30초 소요)"):
+            with st.spinner("이미지 생성 중... (수 초 소요)"):
                 try:
                     st.session_state.poster_raw_image = call_image(
-                        st.session_state.poster_en_prompt, width, height, 5.0, poster_steps, api_key
+                        st.session_state.poster_en_prompt, width, height, poster_steps, api_key
                     )
                     st.session_state.poster_composed = None
                     st.session_state.poster_final = None
