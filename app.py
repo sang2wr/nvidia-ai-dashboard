@@ -17,23 +17,33 @@ IMAGE_API_URL = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.2-kle
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# 2026-09-05 전면 교체: 이전 등록 모델 7개 중 6개가 410 Gone(EOL)이 되어 사이트가 고장 상태였다.
+# 아래는 그날 실제 호출로 생존 + 카테고리별 대표 과제(요약/코드/추론/대화)까지 통과한 모델만 남긴 것.
+# 괄호 안 초는 실측 응답시간. NVIDIA는 모델을 자주 EOL 시키므로 오류가 잦아지면 probe_models.py 로 재점검할 것.
 MODEL_CATEGORIES = {
     "📝 문서·요약·글쓰기": [
-        ("meta/llama-3.3-70b-instruct", "최신 대형 모델 · 정교한 글쓰기/요약에 강함"),
-        ("meta/llama-3.1-70b-instruct", "안정적인 문서 작성·분석"),
+        ("nvidia/ising-calibration-1.5-31b", "빠르고 한국어 요약이 깔끔함 (1.4s)"),
+        ("minimaxai/minimax-m3", "군더더기 없는 정확한 요약 (1.3s)"),
+        ("google/gemma-4-31b-it", "안정적이고 문장이 매끄러움 (6.4s)"),
     ],
     "💻 코드·개발": [
-        ("openai/gpt-oss-20b", "가볍고 빠른 코드 생성"),
-        ("openai/gpt-oss-120b", "복잡한 코드·디버깅에 강함(느림)"),
+        ("openai/gpt-oss-20b", "가볍고 빠른 코드 생성 (1.0s)"),
+        ("nvidia/nemotron-3-super-120b-a12b", "대형 모델인데 빠름 · 설명 없이 코드만 (1.5s)"),
+        # poolside/laguna-xs-2.1 은 코드 품질은 좋았으나 503이 잦고 응답이 22~39초까지 튀어 제외(2026-09-05)
     ],
     "🧠 심층 추론·복잡한 분석": [
-        ("nvidia/llama-3.3-nemotron-super-49b-v1.5", "NVIDIA 튜닝 · 복잡한 추론/분석 특화"),
+        ("nvidia/nemotron-3-ultra-550b-a55b", "최상위 추론 모델 · 긴 분석에 (7.6s)"),
+        ("nvidia/nemotron-3-super-120b-a12b", "추론력 대비 빠름 (1.2s)"),
     ],
     "⚡ 빠른 일반대화": [
-        ("meta/llama-3.1-8b-instruct", "가장 빠른 응답 · 일상 대화"),
-        ("z-ai/glm-5.2", "GLM-5.2 · 빠르고 자연스러운 대화"),
+        ("nvidia/ising-calibration-1.5-31b", "빠르고 자연스러운 한국어 대화"),
+        ("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "가볍고 답이 짧음 (2.5s)"),
     ],
 }
+
+# 사고과정(reasoning_content)을 답변 대신 뱉을 수 있어 max_tokens를 넉넉히 줘야 하는 모델
+REASONING_MODELS = ("openai/gpt-oss", "nvidia/nemotron-3-super", "nvidia/nemotron-3-ultra",
+                    "nvidia/nemotron-3.5-lightning", "moonshotai/")
 
 IMAGE_SIZES = {
     "정사각형 (1024×1024)": (1024, 1024),
@@ -60,7 +70,14 @@ SHADOW_LEVELS = {"없음": 0, "약하게": 2, "강하게": 5}
 BORDER_LEVELS = {"없음": 0, "얇게": 2, "두껍게": 4}
 BAR_LEVELS = {"사용 안 함": None, "반투명": 120, "진하게": 190}
 
-POSTER_TEXT_MODEL = "meta/llama-3.1-70b-instruct"
+# 포스터 문구·프롬프트 번역용. 예전엔 meta/llama-3.1-70b-instruct 하나만 썼는데 그게 EOL 되면서
+# 포스터 기능이 통째로 죽어 있었다 → 앞에서부터 시도하는 폴백 목록으로 바꿔 한 모델이 죽어도 계속 동작하게.
+POSTER_TEXT_MODELS = [
+    "nvidia/ising-calibration-1.5-31b",
+    "google/gemma-4-31b-it",
+    "minimaxai/minimax-m3",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+]
 
 
 # ---------- NVIDIA API 호출 헬퍼 ----------
@@ -86,6 +103,20 @@ def call_chat(model, messages, api_key, temperature=0.7, max_tokens=300):
         body = json.loads(resp.read().decode("utf-8"))
         message = body["choices"][0]["message"]
         return (message.get("content") or message.get("reasoning_content") or "").strip()
+
+
+def call_chat_fallback(models, messages, api_key, temperature=0.7, max_tokens=300):
+    """models를 앞에서부터 시도. NVIDIA가 모델을 자주 EOL(410)/철거(404) 하고 가끔 503이 나므로
+    한 모델이 죽어도 다음 모델로 넘어가 기능 자체는 계속 살아 있게 한다."""
+    last = None
+    for m in models:
+        try:
+            out = call_chat(m, messages, api_key, temperature=temperature, max_tokens=max_tokens)
+            if out:
+                return out
+        except Exception as e:  # HTTPError(404/410/503) 및 타임아웃 포함
+            last = e
+    raise RuntimeError(f"사용 가능한 문구 생성 모델이 없습니다 (마지막 오류: {last})")
 
 
 def call_image(prompt, width, height, steps, api_key):
@@ -124,8 +155,8 @@ def generate_english_prompt(idea, api_key):
         "letters, numbers, or typography in the description — the image itself must contain no "
         "text. Respond with only the prompt, nothing else (no quotes, no explanation)."
     )
-    return call_chat(
-        POSTER_TEXT_MODEL,
+    return call_chat_fallback(
+        POSTER_TEXT_MODELS,
         [{"role": "system", "content": system}, {"role": "user", "content": idea}],
         api_key,
         temperature=0.6,
@@ -141,8 +172,8 @@ def generate_poster_copy(idea, api_key):
         "기간: (일시·기간. 내용에 날짜/요일 정보가 없으면 \"별도 안내\"라고 적어)\n"
         "내용: (장소·대상·신청방법 등 안내사항, 60자 이내, 여러 정보는 ' · '로 구분)"
     )
-    raw = call_chat(
-        POSTER_TEXT_MODEL,
+    raw = call_chat_fallback(
+        POSTER_TEXT_MODELS,
         [{"role": "system", "content": system}, {"role": "user", "content": idea}],
         api_key,
         temperature=0.8,
@@ -372,8 +403,8 @@ with st.sidebar:
 
         temperature = st.slider("Temperature", 0.0, 1.5, 0.7, 0.05)
         max_tokens = st.slider("Max tokens", 64, 4096, 768, 64)
-        if model.startswith("openai/gpt-oss"):
-            st.caption("⚠️ 추론(reasoning) 모델이라 max_tokens가 낮으면 답변이 잘릴 수 있습니다.")
+        if model.startswith(REASONING_MODELS):
+            st.caption("⚠️ 추론(reasoning) 모델이라 max_tokens가 낮으면 사고과정만 나오고 답이 잘릴 수 있습니다.")
 
         if st.button("대화 초기화"):
             st.session_state.messages = []
@@ -386,7 +417,7 @@ with st.sidebar:
         st.caption("⏱️ 이미지 1장 생성에 수 초 정도 걸립니다.")
 
     else:
-        st.caption("모델: FLUX.2-klein(이미지) + Llama 3.1 70B(문구/번역)")
+        st.caption("모델: FLUX.2-klein(이미지) + ising-calibration(문구/번역, 실패 시 자동 대체)")
         poster_size_label = st.selectbox("포스터 비율", list(IMAGE_SIZES.keys()), index=1)
         poster_steps = st.slider("Steps (품질/속도, 최대 4)", 1, 4, 4, 1)
 
