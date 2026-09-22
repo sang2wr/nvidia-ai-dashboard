@@ -13,7 +13,18 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 st.set_page_config(page_title="NVIDIA AI 모델 플레이그라운드", page_icon="🟢", layout="wide")
 
 CHAT_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-IMAGE_API_URL = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.2-klein-4b"
+IMAGE_MODELS = {
+    # 2026-09-06: 쇼츠·아바타 이미지는 전부 flux.1-dev로 뽑는다(화질 우위). klein은 폴백용.
+    "flux.1-dev (고화질, 권장)": {
+        "url": "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev",
+        "max_steps": 50, "cfg_scale": 3.5,
+    },
+    "flux.2-klein-4b (빠름)": {
+        "url": "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.2-klein-4b",
+        "max_steps": 4, "cfg_scale": None,
+    },
+}
+IMAGE_API_URL = IMAGE_MODELS["flux.2-klein-4b (빠름)"]["url"]  # 하위 호환
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -23,7 +34,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_CATEGORIES = {
     "📝 문서·요약·글쓰기": [
         ("nvidia/ising-calibration-1.5-31b", "빠르고 한국어 요약이 깔끔함 (1.4s)"),
-        ("minimaxai/minimax-m3", "군더더기 없는 정확한 요약 (1.3s)"),
+        # minimaxai/minimax-m3 는 2026-09-09 410 Gone → deepseek-v4.1-flash로 교체(2026-09-22 실호출: 요약 정확, 사고과정 때문에 10~14s)
+        ("deepseek-ai/deepseek-v4.1-flash", "정확한 한국어 요약 · 사고과정이 있어 10초대 (13.6s)"),
         ("google/gemma-4-31b-it", "안정적이고 문장이 매끄러움 (6.4s)"),
     ],
     "💻 코드·개발": [
@@ -34,6 +46,7 @@ MODEL_CATEGORIES = {
     "🧠 심층 추론·복잡한 분석": [
         ("nvidia/nemotron-3-ultra-550b-a55b", "최상위 추론 모델 · 긴 분석에 (7.6s)"),
         ("nvidia/nemotron-3-super-120b-a12b", "추론력 대비 빠름 (1.2s)"),
+        ("deepseek-ai/deepseek-v4.1-flash", "지시 준수가 정확한 추론 모델 (2026-09-22 신규, 4~14s)"),
     ],
     "⚡ 빠른 일반대화": [
         ("nvidia/ising-calibration-1.5-31b", "빠르고 자연스러운 한국어 대화"),
@@ -43,9 +56,11 @@ MODEL_CATEGORIES = {
 
 # 사고과정(reasoning_content)을 답변 대신 뱉을 수 있어 max_tokens를 넉넉히 줘야 하는 모델
 REASONING_MODELS = ("openai/gpt-oss", "nvidia/nemotron-3-super", "nvidia/nemotron-3-ultra",
-                    "nvidia/nemotron-3.5-lightning", "moonshotai/")
+                    "nvidia/nemotron-3.5-lightning", "moonshotai/", "deepseek-ai/")
 
 IMAGE_SIZES = {
+    # 쇼츠·아바타는 768×1344를 쓴다(9:16에 가깝고 flux.1-dev가 받는 최대 높이). 2026-09-06 추가
+    "쇼츠·아바타 세로 (768×1344)": (768, 1344),
     "정사각형 (1024×1024)": (1024, 1024),
     "세로형 (832×1216)": (832, 1216),
     "가로형 (1216×832)": (1216, 832),
@@ -75,7 +90,7 @@ BAR_LEVELS = {"사용 안 함": None, "반투명": 120, "진하게": 190}
 POSTER_TEXT_MODELS = [
     "nvidia/ising-calibration-1.5-31b",
     "google/gemma-4-31b-it",
-    "minimaxai/minimax-m3",
+    "deepseek-ai/deepseek-v4.1-flash",   # minimax-m3(410 Gone) 자리, 2026-09-22
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
 ]
 
@@ -119,22 +134,45 @@ def call_chat_fallback(models, messages, api_key, temperature=0.7, max_tokens=30
     raise RuntimeError(f"사용 가능한 문구 생성 모델이 없습니다 (마지막 오류: {last})")
 
 
-def call_image(prompt, width, height, steps, api_key):
-    # flux.2-klein-4b: steps는 최대 4, cfg_scale·mode 파라미터는 받지 않음(422)
+def has_hangul(text):
+    return any("가" <= ch <= "힣" for ch in text or "")
+
+
+def translate_to_en(text, api_key):
+    """한글 이미지 설명을 영어 프롬프트로. 설명문이 아니라 '프롬프트'로 뽑아야 화질이 산다."""
+    messages = [
+        {"role": "system", "content": (
+            "You turn a Korean description into an English image-generation prompt. "
+            "Reply with ONLY the prompt, no quotes, no explanation, no leading label. "
+            "Keep it under 700 characters. Use concrete visual nouns and adjectives "
+            "(subject, clothing, pose, place, time of day, lighting, camera framing). "
+            "Do not invent nudity or brand names.")},
+        {"role": "user", "content": text},
+    ]
+    out = call_chat_fallback(POSTER_TEXT_MODELS, messages, api_key, temperature=0.2, max_tokens=400)
+    return (out or "").strip().strip('"').strip()
+
+
+def call_image(prompt, width, height, steps, api_key, model_key=None):
+    # 모델마다 받는 파라미터가 다르다: flux.1-dev는 cfg_scale(9 이하)을 받고,
+    # flux.2-klein-4b는 cfg_scale을 보내면 422를 낸다. steps 상한도 다르다.
+    spec = IMAGE_MODELS.get(model_key or "flux.2-klein-4b (빠름)")
     payload = {
         "prompt": prompt,
         "width": width,
         "height": height,
-        "steps": min(int(steps), 4),
+        "steps": min(int(steps), spec["max_steps"]),
         "seed": random.randint(0, 2**31 - 1),
     }
+    if spec["cfg_scale"] is not None:
+        payload["cfg_scale"] = spec["cfg_scale"]
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
     req = urllib.request.Request(
-        IMAGE_API_URL,
+        spec["url"],
         data=json.dumps(payload).encode("utf-8"),
         headers=headers,
         method="POST",
@@ -411,9 +449,9 @@ with st.sidebar:
             st.rerun()
 
     elif mode == "🎨 이미지 생성":
-        st.caption("모델: black-forest-labs/flux.2-klein-4b")
+        st.caption("모델: flux.1-dev(고화질) / flux.2-klein-4b(빠름) 중 선택")
         size_label = st.selectbox("이미지 비율", list(IMAGE_SIZES.keys()))
-        steps = st.slider("Steps (품질/속도, 최대 4)", 1, 4, 4, 1)
+        steps = st.slider("Steps (품질/속도)", 1, 50, 32, 1, help="flux.1-dev는 30~35 권장. klein은 4에서 자동으로 잘립니다.")
         st.caption("⏱️ 이미지 1장 생성에 수 초 정도 걸립니다.")
 
     else:
@@ -503,11 +541,34 @@ elif mode == "🎨 이미지 생성":
     if "images" not in st.session_state:
         st.session_state.images = []
 
-    prompt = st.text_area(
-        "이미지 설명 (프롬프트, 영어로 작성하면 품질이 더 좋습니다)",
-        placeholder="예: a cute orange cat sitting on a windowsill, digital art",
+    model_key = st.selectbox("이미지 모델", list(IMAGE_MODELS.keys()), index=0)
+    prompt_in = st.text_area(
+        "이미지 설명 (한글로 써도 됩니다)",
+        placeholder="예: 노을 지는 바닷가 나무 데크길, 분홍 시폰 원피스를 입은 20대 여성, 전신",
         height=100,
+        key="prompt_in",
     )
+
+    # 한글이 들어오면 영어 프롬프트로 바꿔 바로 아래에 보여준다(수정 가능).
+    # 같은 문장에 대해 두 번 호출하지 않도록 원문을 기억해 둔다.
+    prompt = prompt_in
+    if has_hangul(prompt_in) and api_key:
+        if st.session_state.get("tr_src") != prompt_in:
+            with st.spinner("영어 프롬프트로 변환 중..."):
+                try:
+                    st.session_state.tr_out = translate_to_en(prompt_in, api_key)
+                    st.session_state.tr_src = prompt_in
+                except Exception as e:
+                    st.warning(f"번역 실패({e}) — 입력한 한글 그대로 씁니다.")
+                    st.session_state.tr_out = prompt_in
+                    st.session_state.tr_src = prompt_in
+        prompt = st.text_area(
+            "영어 프롬프트 (자동 변환됨 · 직접 고쳐도 됩니다)",
+            value=st.session_state.get("tr_out", ""),
+            height=100,
+            key="prompt_en",
+        )
+    st.caption("프롬프트는 800자에서 잘립니다 — 중요한 내용(의상·구도)을 앞에 쓰세요.")
     generate = st.button("🎨 이미지 생성", type="primary")
 
     if generate:
@@ -521,7 +582,7 @@ elif mode == "🎨 이미지 생성":
         width, height = IMAGE_SIZES[size_label]
         with st.spinner("이미지 생성 중... (수 초 소요)"):
             try:
-                img_bytes = call_image(prompt, width, height, steps, api_key)
+                img_bytes = call_image(prompt, width, height, steps, api_key, model_key)
                 st.session_state.images.insert(0, {"prompt": prompt, "bytes": img_bytes})
             except urllib.error.HTTPError as e:
                 st.error(f"API 오류 ({e.code}): {e.read().decode('utf-8', errors='ignore')}")
