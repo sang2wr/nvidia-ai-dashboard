@@ -36,7 +36,10 @@ MODEL_CATEGORIES = {
         ("nvidia/ising-calibration-1.5-31b", "빠르고 한국어 요약이 깔끔함 (1.4s)"),
         # minimaxai/minimax-m3 는 2026-09-09 410 Gone → deepseek-v4.1-flash로 교체(2026-09-22 실호출: 요약 정확, 사고과정 때문에 10~14s)
         ("deepseek-ai/deepseek-v4.1-flash", "정확한 한국어 요약 · 사고과정이 있어 10초대 (13.6s)"),
-        ("google/gemma-4-31b-it", "안정적이고 문장이 매끄러움 (6.4s)"),
+        # 2026-10-02: 9/22엔 타임아웃이던 diffusiongemma가 0.6~2.4s로 정상화(요약·800자 장문 모두 통과).
+        # 연속 호출하면 429가 잦고 '숫자만' 같은 초단답은 빈 응답이 나올 수 있다.
+        ("google/diffusiongemma-26b-a4b-it", "가장 빠르고 문장이 매끄러움 · 연속 호출 시 429 (0.6~2.4s)"),
+        # google/gemma-4-31b-it 는 2026-10-02 실측 47~102s(90초 타임아웃 초과)로 느려져 목록에서 제외
     ],
     "💻 코드·개발": [
         ("openai/gpt-oss-20b", "가볍고 빠른 코드 생성 (1.0s)"),
@@ -50,6 +53,7 @@ MODEL_CATEGORIES = {
     ],
     "⚡ 빠른 일반대화": [
         ("nvidia/ising-calibration-1.5-31b", "빠르고 자연스러운 한국어 대화"),
+        ("google/diffusiongemma-26b-a4b-it", "0.6초대 응답 · 연속 호출 시 429 (2026-10-02 신규)"),
         ("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "가볍고 답이 짧음 (2.5s)"),
     ],
 }
@@ -89,9 +93,10 @@ BAR_LEVELS = {"사용 안 함": None, "반투명": 120, "진하게": 190}
 # 포스터 기능이 통째로 죽어 있었다 → 앞에서부터 시도하는 폴백 목록으로 바꿔 한 모델이 죽어도 계속 동작하게.
 POSTER_TEXT_MODELS = [
     "nvidia/ising-calibration-1.5-31b",
-    "google/gemma-4-31b-it",
+    "google/diffusiongemma-26b-a4b-it",  # 2026-10-02 추가: 1초 안팎, 429·빈 응답이면 다음 모델로 넘어감
     "deepseek-ai/deepseek-v4.1-flash",   # minimax-m3(410 Gone) 자리, 2026-09-22
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    "google/gemma-4-31b-it",             # 2026-10-02 실측 47~102s로 느려져 맨 뒤로
 ]
 
 
