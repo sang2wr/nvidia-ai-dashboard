@@ -1,10 +1,9 @@
 """nemotron-parse(문서 파서) + 비전 모델들에 같은 문서 이미지를 넣어 정확도를 본다.
 NVIDIA VLM은 모델마다 입력 형식이 달라 3가지 형식을 순서대로 시도한다."""
 import sys, json, io, re, time, base64, urllib.request, urllib.error
+from _common import load_key
 sys.stdout.reconfigure(encoding='utf-8')
-key = [re.match(r'\s*NVIDIA_API_KEY\s*=\s*["\'](.+?)["\']', l).group(1)
-       for l in io.open(r'C:\Users\82104\nvidia_ai_dashboard\.streamlit\secrets.toml', encoding='utf-8')
-       if re.match(r'\s*NVIDIA_API_KEY\s*=', l)][0]
+key = load_key()
 B64 = base64.b64encode(open('testdoc.png', 'rb').read()).decode()
 PROMPT = "이 문서의 표를 그대로 읽어서 markdown 표로 옮기고, 아래 안내 문구도 그대로 적어줘."
 

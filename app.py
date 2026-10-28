@@ -1,4 +1,5 @@
 import base64
+import hmac
 import io
 import json
 import os
@@ -100,6 +101,71 @@ POSTER_TEXT_MODELS = [
 ]
 
 
+# ---------- 보안·입력 제한 ----------
+
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024      # 로고 업로드 상한
+MAX_UPLOAD_PIXELS = 25_000_000          # 디컴프레션 봄브 방지
+MAX_CHAT_INPUT_CHARS = 8000
+MAX_CHAT_HISTORY = 40                   # API로 보내는 최근 메시지 수 상한
+MAX_PROMPT_CHARS = 800
+MAX_QR_CHARS = 1000
+MAX_ERROR_CHARS = 300
+
+Image.MAX_IMAGE_PIXELS = MAX_UPLOAD_PIXELS
+
+
+def redact(text, *secrets):
+    """오류 문구에 API 키가 섞여 화면/로그로 나가지 않도록 가린다."""
+    text = str(text)
+    for sec in secrets:
+        if sec:
+            text = text.replace(sec, "***")
+    return text
+
+
+def http_error_text(e, api_key=""):
+    """HTTPError 본문은 원문 전체 대신 상태코드와 짧게 자른 내용만 보여준다."""
+    try:
+        body = e.read().decode("utf-8", errors="ignore")
+    except Exception:
+        body = ""
+    return f"API 오류 ({e.code}): {redact(body, api_key)[:MAX_ERROR_CHARS]}"
+
+
+def resolve_api_key():
+    """사용자가 직접 입력한 키가 우선. 서버 키(st.secrets)는 브라우저로 내려보내지 않고
+    APP_PASSWORD 를 맞게 입력한 경우에만 서버 쪽에서 사용한다(미설정 시 서버 키는 쓰지 않음)."""
+    typed = st.sidebar.text_input("NVIDIA API Key", type="password",
+                                  help="본인 키를 입력하거나, 아래 접근 암호를 입력하면 서버 키를 사용합니다.")
+    if typed.strip():
+        return typed.strip()
+    try:
+        server_key = st.secrets.get("NVIDIA_API_KEY", "")
+        app_password = st.secrets.get("APP_PASSWORD", "")
+    except Exception:  # secrets.toml 없음
+        return ""
+    if not server_key or not app_password:
+        return ""
+    given = st.sidebar.text_input("접근 암호 (서버 키 사용 시)", type="password")
+    if given and hmac.compare_digest(given.encode("utf-8"), str(app_password).encode("utf-8")):
+        return server_key
+    if given:
+        st.sidebar.error("접근 암호가 맞지 않습니다.")
+    return ""
+
+
+def safe_open_image(data):
+    """업로드 이미지를 크기·픽셀 수를 제한해서 연다. 실패하면 ValueError."""
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise ValueError("이미지 파일이 너무 큽니다 (최대 5MB).")
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.load()
+    except Exception as e:
+        raise ValueError(f"이미지를 읽을 수 없습니다: {type(e).__name__}") from e
+    return img
+
+
 # ---------- NVIDIA API 호출 헬퍼 ----------
 
 def call_chat(model, messages, api_key, temperature=0.7, max_tokens=300):
@@ -136,7 +202,7 @@ def call_chat_fallback(models, messages, api_key, temperature=0.7, max_tokens=30
                 return out
         except Exception as e:  # HTTPError(404/410/503) 및 타임아웃 포함
             last = e
-    raise RuntimeError(f"사용 가능한 문구 생성 모델이 없습니다 (마지막 오류: {last})")
+    raise RuntimeError(f"사용 가능한 문구 생성 모델이 없습니다 (마지막 오류: {redact(last, api_key)[:MAX_ERROR_CHARS]})")
 
 
 def has_hangul(text):
@@ -371,7 +437,7 @@ def compose_poster(
         y += th + gap
 
     if logo_bytes:
-        logo_img = Image.open(io.BytesIO(logo_bytes))
+        logo_img = safe_open_image(logo_bytes)
         img = paste_overlay(img, logo_img, logo_position, logo_size_pct)
 
     if qr_image is not None:
@@ -430,8 +496,7 @@ st.title("🟢 NVIDIA AI 모델 플레이그라운드")
 with st.sidebar:
     st.header("설정")
 
-    default_key = st.secrets.get("NVIDIA_API_KEY", "") if hasattr(st, "secrets") else ""
-    api_key = st.text_input("NVIDIA API Key", value=default_key, type="password")
+    api_key = resolve_api_key()
 
     mode = st.radio("모드", ["💬 텍스트 채팅", "🎨 이미지 생성", "🖼️ 포스터 생성"])
 
@@ -490,7 +555,7 @@ with st.sidebar:
 
         poster_qr_enabled = st.checkbox("QR 코드 추가")
         if poster_qr_enabled:
-            poster_qr_data = st.text_input("QR 코드에 담을 URL 또는 텍스트")
+            poster_qr_data = st.text_input("QR 코드에 담을 URL 또는 텍스트", max_chars=MAX_QR_CHARS)
             poster_qr_position = st.selectbox("QR 위치", CORNER_POSITIONS, index=3, key="qr_pos")
             poster_qr_size = st.slider("QR 크기 (%)", 5, 30, 12, 1, key="qr_size")
         else:
@@ -519,6 +584,9 @@ if mode == "💬 텍스트 채팅":
         if not api_key:
             st.error("사이드바에 NVIDIA API Key를 입력해주세요.")
             st.stop()
+        if len(user_input) > MAX_CHAT_INPUT_CHARS:
+            st.error(f"메시지가 너무 깁니다 (최대 {MAX_CHAT_INPUT_CHARS}자).")
+            st.stop()
 
         st.session_state.messages.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
@@ -528,14 +596,16 @@ if mode == "💬 텍스트 채팅":
             with st.spinner("응답 생성 중..."):
                 try:
                     full_response = call_chat(
-                        model, st.session_state.messages, api_key,
+                        model, st.session_state.messages[-MAX_CHAT_HISTORY:], api_key,
                         temperature=temperature, max_tokens=max_tokens,
                     )
                 except urllib.error.HTTPError as e:
-                    st.error(f"API 오류 ({e.code}): {e.read().decode('utf-8', errors='ignore')}")
+                    st.session_state.messages.pop()  # 실패한 질문이 남아 user 메시지가 연속되지 않게
+                    st.error(http_error_text(e, api_key))
                     st.stop()
                 except Exception as e:
-                    st.error(f"요청 실패: {e}")
+                    st.session_state.messages.pop()
+                    st.error(f"요청 실패: {redact(e, api_key)[:MAX_ERROR_CHARS]}")
                     st.stop()
 
             st.markdown(full_response)
@@ -551,6 +621,7 @@ elif mode == "🎨 이미지 생성":
         "이미지 설명 (한글로 써도 됩니다)",
         placeholder="예: 노을 지는 바닷가 나무 데크길, 분홍 시폰 원피스를 입은 20대 여성, 전신",
         height=100,
+        max_chars=2000,
         key="prompt_in",
     )
 
@@ -564,7 +635,7 @@ elif mode == "🎨 이미지 생성":
                     st.session_state.tr_out = translate_to_en(prompt_in, api_key)
                     st.session_state.tr_src = prompt_in
                 except Exception as e:
-                    st.warning(f"번역 실패({e}) — 입력한 한글 그대로 씁니다.")
+                    st.warning(f"번역 실패({redact(e, api_key)[:MAX_ERROR_CHARS]}) — 입력한 한글 그대로 씁니다.")
                     st.session_state.tr_out = prompt_in
                     st.session_state.tr_src = prompt_in
         prompt = st.text_area(
@@ -583,6 +654,7 @@ elif mode == "🎨 이미지 생성":
         if not prompt.strip():
             st.error("이미지 설명을 입력해주세요.")
             st.stop()
+        prompt = prompt[:MAX_PROMPT_CHARS]
 
         width, height = IMAGE_SIZES[size_label]
         with st.spinner("이미지 생성 중... (수 초 소요)"):
@@ -590,9 +662,9 @@ elif mode == "🎨 이미지 생성":
                 img_bytes = call_image(prompt, width, height, steps, api_key, model_key)
                 st.session_state.images.insert(0, {"prompt": prompt, "bytes": img_bytes})
             except urllib.error.HTTPError as e:
-                st.error(f"API 오류 ({e.code}): {e.read().decode('utf-8', errors='ignore')}")
+                st.error(http_error_text(e, api_key))
             except Exception as e:
-                st.error(f"요청 실패: {e}")
+                st.error(f"요청 실패: {redact(e, api_key)[:MAX_ERROR_CHARS]}")
 
     for i, item in enumerate(st.session_state.images):
         st.image(item["bytes"], caption=item["prompt"], width=512)
@@ -641,7 +713,7 @@ else:
                 try:
                     st.session_state.poster_en_prompt = generate_english_prompt(idea, api_key)
                 except Exception as e:
-                    st.error(f"요청 실패: {e}")
+                    st.error(f"요청 실패: {redact(e, api_key)[:MAX_ERROR_CHARS]}")
 
     st.session_state.poster_en_prompt = st.text_area(
         "② 영어 프롬프트 (자동 생성됨, 직접 수정 가능)",
@@ -665,7 +737,7 @@ else:
                     st.session_state.poster_composed = None
                     st.session_state.poster_final = None
                 except Exception as e:
-                    st.error(f"요청 실패: {e}")
+                    st.error(f"요청 실패: {redact(e, api_key)[:MAX_ERROR_CHARS]}")
 
     if st.session_state.poster_raw_image:
         st.image(st.session_state.poster_raw_image, caption="생성된 원본 이미지", width=400)
@@ -683,7 +755,7 @@ else:
                     st.session_state.poster_period = period
                     st.session_state.poster_content = content
                 except Exception as e:
-                    st.error(f"요청 실패: {e}")
+                    st.error(f"요청 실패: {redact(e, api_key)[:MAX_ERROR_CHARS]}")
 
     st.markdown("④ 포스터 문구 (자동 생성됨, 직접 수정 가능 — 안내 포스터 형식: 제목/기간/내용)")
     st.session_state.poster_title = st.text_input(
@@ -704,30 +776,33 @@ else:
         if not st.session_state.poster_raw_image:
             st.error("먼저 2단계에서 이미지를 생성해주세요.")
         else:
-            font_paths = POSTER_FONTS[poster_font_label]
-            st.session_state.poster_composed = compose_poster(
-                st.session_state.poster_raw_image,
-                st.session_state.poster_title,
-                st.session_state.poster_period,
-                st.session_state.poster_content,
-                poster_align,
-                poster_position,
-                poster_offset,
-                font_paths,
-                hex_to_rgb(poster_title_color),
-                hex_to_rgb(poster_body_color),
-                poster_shadow_level,
-                poster_border_level,
-                hex_to_rgb(poster_border_color),
-                poster_bar_level,
-                logo_bytes=poster_logo_file.getvalue() if poster_logo_file else None,
-                logo_position=poster_logo_position,
-                logo_size_pct=poster_logo_size,
-                qr_image=generate_qr_image(poster_qr_data) if (poster_qr_enabled and poster_qr_data.strip()) else None,
-                qr_position=poster_qr_position,
-                qr_size_pct=poster_qr_size,
-            )
-            st.session_state.poster_final = None
+            try:
+                font_paths = POSTER_FONTS[poster_font_label]
+                st.session_state.poster_composed = compose_poster(
+                    st.session_state.poster_raw_image,
+                    st.session_state.poster_title,
+                    st.session_state.poster_period,
+                    st.session_state.poster_content,
+                    poster_align,
+                    poster_position,
+                    poster_offset,
+                    font_paths,
+                    hex_to_rgb(poster_title_color),
+                    hex_to_rgb(poster_body_color),
+                    poster_shadow_level,
+                    poster_border_level,
+                    hex_to_rgb(poster_border_color),
+                    poster_bar_level,
+                    logo_bytes=poster_logo_file.getvalue() if poster_logo_file else None,
+                    logo_position=poster_logo_position,
+                    logo_size_pct=poster_logo_size,
+                    qr_image=generate_qr_image(poster_qr_data) if (poster_qr_enabled and poster_qr_data.strip()) else None,
+                    qr_position=poster_qr_position,
+                    qr_size_pct=poster_qr_size,
+                )
+                st.session_state.poster_final = None
+            except ValueError as e:
+                st.error(str(e))
 
     if st.session_state.poster_composed:
         st.image(st.session_state.poster_composed, caption="합성된 포스터", width=450)

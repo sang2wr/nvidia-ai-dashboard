@@ -1,8 +1,6 @@
 import sys, json, io, re, time, urllib.request, urllib.error
 sys.stdout.reconfigure(encoding='utf-8')
-key=[re.match(r'\s*NVIDIA_API_KEY\s*=\s*["\'](.+?)["\']',l).group(1)
-     for l in io.open(r'C:\Users\82104\nvidia_ai_dashboard\.streamlit\secrets.toml',encoding='utf-8')
-     if re.match(r'\s*NVIDIA_API_KEY\s*=',l)][0]
+key = load_key()
 
 CUR=['meta/llama-3.3-70b-instruct','meta/llama-3.1-70b-instruct','meta/llama-3.1-8b-instruct',
      'openai/gpt-oss-120b','openai/gpt-oss-20b','nvidia/llama-3.3-nemotron-super-49b-v1.5','z-ai/glm-5.2']
