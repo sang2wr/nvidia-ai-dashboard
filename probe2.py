@@ -1,10 +1,9 @@
 """2026-09-05 재조사: 타임아웃났던 모델 재시험(180초·2회) + 미시험 카탈로그 모델 전수 시험."""
 import sys, json, io, re, time, urllib.request, urllib.error
+from _common import load_key
 from concurrent.futures import ThreadPoolExecutor
 sys.stdout.reconfigure(encoding='utf-8')
-key = [re.match(r'\s*NVIDIA_API_KEY\s*=\s*["\'](.+?)["\']', l).group(1)
-       for l in io.open(r'C:\Users\82104\nvidia_ai_dashboard\.streamlit\secrets.toml', encoding='utf-8')
-       if re.match(r'\s*NVIDIA_API_KEY\s*=', l)][0]
+key = load_key()
 
 RETRY = ['deepseek-ai/deepseek-v4-pro-0813', 'deepseek-ai/deepseek-v4-flash-0731', 'moonshotai/kimi-k3',
          'mistralai/mistral-nemotron', 'meta/llama-3.2-90b-vision-instruct', 'nvidia/nemotron-3-super-120b-a12b']

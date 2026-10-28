@@ -2,8 +2,8 @@
 import sys, os
 sys.stdout.reconfigure(encoding='utf-8')
 from PIL import Image, ImageDraw, ImageFont
-F = r"C:\Users\82104\nvidia_ai_dashboard\fonts\NanumGothic.ttf"
-B = r"C:\Users\82104\nvidia_ai_dashboard\fonts\NanumGothicBold.ttf"
+F = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "NanumGothic.ttf")
+B = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "NanumGothicBold.ttf")
 W, H = 1000, 700
 img = Image.new("RGB", (W, H), "white"); d = ImageDraw.Draw(img)
 d.text((40, 30), "2026년 9월 AI 교육 출석부", font=ImageFont.truetype(B, 34), fill="black")

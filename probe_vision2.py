@@ -1,9 +1,8 @@
 """nemotron-parse 정확도 확인 + 비전/임베딩 계열 전수 시험 (2026-09-05)."""
 import sys, json, io, re, time, base64, urllib.request, urllib.error
+from _common import load_key
 sys.stdout.reconfigure(encoding='utf-8')
-key = [re.match(r'\s*NVIDIA_API_KEY\s*=\s*["\'](.+?)["\']', l).group(1)
-       for l in io.open(r'.streamlit\secrets.toml', encoding='utf-8')
-       if re.match(r'\s*NVIDIA_API_KEY\s*=', l)][0]
+key = load_key()
 B64 = base64.b64encode(open('testdoc.png','rb').read()).decode()
 IMG = f'<img src="data:image/png;base64,{B64}" />'
 CHAT = 'https://integrate.api.nvidia.com/v1/chat/completions'

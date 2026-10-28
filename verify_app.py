@@ -1,7 +1,8 @@
 """app.py의 모델 설정이 실제로 동작하는지 Streamlit 없이 직접 검증."""
-import sys, io, re, types, time
+import os, sys, io, re, types, time
+from _common import load_key
 sys.stdout.reconfigure(encoding='utf-8')
-sys.path.insert(0, r'C:\Users\82104\nvidia_ai_dashboard')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # streamlit/qrcode 없이 app.py를 import 하기 위한 최소 스텁
 class _Stub:
@@ -17,9 +18,7 @@ head = src.split('# ---------- 포스터 합성 ----------')[0]
 mod = types.ModuleType('appcore'); mod.__dict__['__file__'] = 'app.py'
 exec(compile(head, 'app.py', 'exec'), mod.__dict__)
 
-key = [re.match(r'\s*NVIDIA_API_KEY\s*=\s*["\'](.+?)["\']', l).group(1)
-       for l in io.open('.streamlit/secrets.toml', encoding='utf-8')
-       if re.match(r'\s*NVIDIA_API_KEY\s*=', l)][0]
+key = load_key()
 
 print("=== 1) 채팅 카테고리별 등록 모델 전수 호출 ===")
 ok = fail = 0

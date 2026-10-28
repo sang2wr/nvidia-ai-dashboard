@@ -1,7 +1,8 @@
 """2026-10-02 카탈로그 diff + 신규 모델/등록 모델 실호출 점검. urllib 사용(requests는 이 PC에서 멈춤)."""
 import json, time, tomllib, urllib.request, urllib.error, sys, re
+from _common import load_key
 sys.stdout.reconfigure(encoding='utf-8')
-key = tomllib.load(open('.streamlit/secrets.toml', 'rb'))['NVIDIA_API_KEY']
+key = load_key()
 H = {'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'}
 
 cat = json.load(urllib.request.urlopen(urllib.request.Request('https://integrate.api.nvidia.com/v1/models', headers=H), timeout=60))
