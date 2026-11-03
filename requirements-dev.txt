@@ -1,0 +1,4 @@
+# 로컬 점검·테스트용 (배포에는 requirements.txt만 사용)
+-r requirements.txt
+pytest>=8
+openpyxl>=3.1
