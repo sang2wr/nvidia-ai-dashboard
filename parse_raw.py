@@ -1,8 +1,6 @@
 import sys, json, io, re, time, base64, urllib.request, urllib.error
 sys.stdout.reconfigure(encoding='utf-8')
-key = [re.match(r'\s*NVIDIA_API_KEY\s*=\s*["\'](.+?)["\']', l).group(1)
-       for l in io.open(r'.streamlit\secrets.toml', encoding='utf-8')
-       if re.match(r'\s*NVIDIA_API_KEY\s*=', l)][0]
+key = load_key()
 B64 = base64.b64encode(open('testdoc.png','rb').read()).decode()
 URL='https://integrate.api.nvidia.com/v1/chat/completions'
 def post(p, timeout=120):

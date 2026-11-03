@@ -1,12 +1,19 @@
 """2026-07-24 xlsx의 '사용가능 모델' 48개가 2026-09-05에도 살아있는지 전수 재확인."""
 import sys, json, io, re, time, urllib.request, urllib.error
+from _common import load_key
 from concurrent.futures import ThreadPoolExecutor
+import os
 sys.stdout.reconfigure(encoding='utf-8')
-import openpyxl
-key = [re.match(r'\s*NVIDIA_API_KEY\s*=\s*["\'](.+?)["\']', l).group(1)
-       for l in io.open(r'.streamlit\secrets.toml', encoding='utf-8')
-       if re.match(r'\s*NVIDIA_API_KEY\s*=', l)][0]
-wb = openpyxl.load_workbook("NVIDIA_모델_전수조사.xlsx", data_only=True)
+# 사용법: python compare_july.py [xlsx 경로]  (기본: 같은 폴더의 NVIDIA_모델_전수조사.xlsx — 저장소에는 없음)
+XLSX = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "NVIDIA_모델_전수조사.xlsx")
+if not os.path.exists(XLSX):
+    sys.exit(f"7월 조사 파일이 없습니다: {XLSX}\n  (저장소에 포함되지 않은 로컬 파일 — 경로를 인자로 넘기세요)")
+try:
+    import openpyxl
+except ImportError:
+    sys.exit("openpyxl 이 필요합니다: pip install -r requirements-dev.txt")
+key = load_key()
+wb = openpyxl.load_workbook(XLSX, data_only=True)
 ws = wb["사용가능 모델"]
 rows = [(r[0], r[1], r[2]) for r in ws.iter_rows(min_row=2, values_only=True) if r[1]]
 print(f"7월 '사용가능' {len(rows)}개 재확인\n")

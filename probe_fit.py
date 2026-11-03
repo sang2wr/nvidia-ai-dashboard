@@ -2,11 +2,10 @@
 probe2.py가 생사만 본다면, 이건 대시보드 어느 칸에 넣을지 정하기 위한 시험.
 """
 import sys, json, io, re, time, urllib.request, urllib.error
+from _common import load_key
 from concurrent.futures import ThreadPoolExecutor
 sys.stdout.reconfigure(encoding='utf-8')
-key = [re.match(r'\s*NVIDIA_API_KEY\s*=\s*["\'](.+?)["\']', l).group(1)
-       for l in io.open(r'C:\Users\82104\nvidia_ai_dashboard\.streamlit\secrets.toml', encoding='utf-8')
-       if re.match(r'\s*NVIDIA_API_KEY\s*=', l)][0]
+key = load_key()
 
 TASKS = {
  "문서": ("다음을 한국어 두 문장으로 요약하세요. 요약문만 출력:\n"
