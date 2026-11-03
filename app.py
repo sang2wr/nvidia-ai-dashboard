@@ -165,6 +165,12 @@ def safe_open_image(data):
         raise ValueError("이미지 파일이 너무 큽니다 (최대 5MB).")
     try:
         img = Image.open(io.BytesIO(data))
+    except Exception as e:
+        raise ValueError(f"이미지를 읽을 수 없습니다: {type(e).__name__}") from e
+    # PIL은 MAX_IMAGE_PIXELS의 1~2배 구간에선 경고만 내고 그대로 연다 → 디코딩 전에 직접 확인
+    if img.width * img.height > MAX_UPLOAD_PIXELS:
+        raise ValueError(f"이미지 해상도가 너무 큽니다 (최대 {MAX_UPLOAD_PIXELS // 1_000_000}MP).")
+    try:
         img.load()
     except Exception as e:
         raise ValueError(f"이미지를 읽을 수 없습니다: {type(e).__name__}") from e
