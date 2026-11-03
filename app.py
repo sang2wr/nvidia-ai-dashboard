@@ -300,6 +300,8 @@ with st.sidebar:
     st.header("설정")
 
     api_key = resolve_api_key()
+    st.caption("🔒 입력한 내용(채팅·이미지 설명·포스터 아이디어)은 NVIDIA API로 전송됩니다. "
+               "개인정보·민감정보는 입력하지 마세요.")
 
     mode = st.radio("모드", ["💬 텍스트 채팅", "🎨 이미지 생성", "🖼️ 포스터 생성"])
 
