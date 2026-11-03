@@ -144,7 +144,12 @@ def resolve_api_key():
         app_password = st.secrets.get("APP_PASSWORD", "")
     except Exception:  # secrets.toml 없음
         return ""
-    if not server_key or not app_password:
+    if not server_key:
+        return ""
+    if not app_password:
+        # 서버 키는 있지만 APP_PASSWORD 미설정 → 서버 키는 쓰지 않는다(fail-closed). 이유를 화면에 알린다.
+        st.sidebar.warning("공용(서버) 키는 관리자가 접근 암호(APP_PASSWORD)를 설정해야 사용할 수 있습니다. "
+                           "지금은 위에 본인 NVIDIA API Key를 입력해야 사용할 수 있습니다.")
         return ""
     given = st.sidebar.text_input("접근 암호 (서버 키 사용 시)", type="password")
     if given and hmac.compare_digest(given.encode("utf-8"), str(app_password).encode("utf-8")):
